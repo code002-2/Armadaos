@@ -147,6 +147,29 @@ jobs:
           sudo chown -R "${RUNNER_UID}:${RUNNER_UID}" "/run/user/${RUNNER_UID}"
           sudo chmod 0700 "/run/user/${RUNNER_UID}"
 
+      - name: Resolve package refs
+        run: |
+          set -euo pipefail
+          # The root Containerfile's stages are FROM ${XXX_REF}; resolve each
+          # packages/ entry to the matching image upstream (this port does not
+          # modify packages/, so the upstream content-hash tags always apply).
+          refs=""
+          for dir in packages/*/; do
+            pkg="$(basename "${dir}")"
+            [ -f "${dir}/build.sh" ] || continue
+            hash="$(packages/package-hash.sh "${pkg}")"
+            var="$(printf '%s' "${pkg}" | tr '[:lower:]-' '[:upper:]_')_REF"
+            if sudo skopeo inspect --raw "docker://ghcr.io/armada-os/armada/pkg/${pkg}:${hash}" >/dev/null 2>&1; then
+              refs="${refs}${var}=ghcr.io/armada-os/armada/pkg/${pkg}:${hash}"$'\n'
+            else
+              echo "::error::package ${pkg}@${hash} is not published upstream and this workflow does not build packages; run packages.yml first" >&2
+              exit 1
+            fi
+          done
+          printf '%s' "${refs}" > "${RUNNER_TEMP}/package-refs.env"
+          echo "==> resolved package refs:"
+          cat "${RUNNER_TEMP}/package-refs.env"
+
       - name: Build + push Armada container with the thyme kernel
         id: container
         env:
@@ -171,6 +194,7 @@ jobs:
               --build-arg ARMADA_VERSION="${ARMADA_VERSION}" \
               --build-arg ARMADA_DEVICE=sm8250-xiaomi-thyme \
               --build-arg KERNEL_PKG="${KERNEL_REF}" \
+              --build-arg-file="${RUNNER_TEMP}/package-refs.env" \
               --format docker --tls-verify=true \
               --skip-unused-stages=false \
               --target=armada-rootfs \
