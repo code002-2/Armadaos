@@ -54,3 +54,10 @@ $ just build-thyme-flashable localhost/armada-thyme-kernel:7.2.0-rc5
 
 修改 `BUILD.env` 中的 `KERNEL_BRANCH`，并从对应代码树刷新 `sm8250.config`。
 `build.sh` 中的合并过滤器保证 thyme 配置删除某个符号时不会破坏 armada 片段。
+
+## initramfs
+
+`sm8250.config` 通过相对路径 `armada-thyme-initramfs.cpio.gz` 把 initramfs
+烘进内核镜像(thyme 的 ABL 启动流程依赖它)。该文件在 `initramfs/`
+下入库(真机验证过的版本,源自 sm8250-xiaomi-lmi 移植工作副本),
+`build.sh` 会在构建前把它放进内核树根目录,因此 CI 与本地构建产物一致。

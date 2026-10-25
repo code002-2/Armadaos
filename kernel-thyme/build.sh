@@ -63,6 +63,15 @@ else
 fi
 cd "${SRC}"
 
+# The board config bakes an initramfs into the kernel (the thyme ABL boot
+# flow relies on it). sm8250.config references it by a relative name; stage
+# the device-validated copy vendored in kernel-thyme/initramfs/ so builds
+# work anywhere, not just on the porting workstation.
+if [ -f "${SCRIPT_DIR}/initramfs/thyme-initramfs.cpio.gz" ]; then
+    cp "${SCRIPT_DIR}/initramfs/thyme-initramfs.cpio.gz" \
+       "${SRC}/armada-thyme-initramfs.cpio.gz"
+fi
+
 # ---- 2. Config: thyme board config + armada fragments ------------------------
 [[ -f "${SCRIPT_DIR}/${KERNEL_CONFIG}" ]] || {
     echo "ERROR: ${KERNEL_CONFIG} missing; ship it alongside kernel-thyme/" >&2
