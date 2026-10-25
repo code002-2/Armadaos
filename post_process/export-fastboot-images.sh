@@ -1,7 +1,8 @@
 #!/bin/bash
 # Export fastboot-flashable images for an Armada device that boots from the
 # Android internal-storage partitions via the vendor ABL (no UEFI/ESP, no
-# ROCKNIX /KERNEL) -currently the Xiaomi Pad 6S Pro (sheng).
+# ROCKNIX /KERNEL) -currently the Xiaomi Pad 6S Pro (sheng) and the Xiaomi
+# Mi 10S (thyme); select with --device.
 #
 # SINGLE-PARTITION LAYOUT: the BIB raw image (ESP + /boot + root) is merged
 # into one rootfs -the /boot payload (ostree deployments, vmlinuz,
@@ -88,6 +89,12 @@ device_cmdline_max="${ARMADA_CMDLINE_MAX}"
 . "${ROOT}/system_files/usr/lib/armada/bootimg-args"
 ARMADA_BOOTIMG_ARGS="${device_args}"
 ARMADA_CMDLINE_MAX="${device_cmdline_max}"
+
+# Boot/dtbo partitions the generated flash scripts write. Device profiles may
+# override (thyme has A/B slots and flashes both); the sheng default flashes
+# the single boot_b and erases dtbo_b.
+BOOT_PARTS="${ARMADA_BOOT_PARTS:-boot_b}"
+DTBO_PARTS="${ARMADA_DTBO_PARTS:-dtbo_b}"
 
 WORK="$(mktemp -d)"
 trap 'sudo umount "${WORK}/bootfs" 2>/dev/null || true; sudo umount "${WORK}/rootfs" 2>/dev/null || true; [ -n "${LOOP}" ] && sudo losetup -d "${LOOP}" 2>/dev/null || true; rm -rf "${WORK}"' EXIT
@@ -347,9 +354,20 @@ sudo blkid "${OUT}/linux.img" | grep -qE 'TYPE="(ext4|btrfs)"' || { echo "ERROR:
     } > MANIFEST.txt
 )
 
+# Boot/dtbo flash command lines, unrolled per device profile into the
+# generated scripts (thyme flashes both A/B slots, sheng only boot_b).
+BOOT_FLASH_LINES=""
+for p in ${BOOT_PARTS}; do
+    BOOT_FLASH_LINES+="fastboot flash ${p} boot_b.img"$'\n'
+done
+DTBO_ERASE_LINES=""
+for p in ${DTBO_PARTS}; do
+    DTBO_ERASE_LINES+="fastboot erase ${p}"$'\n'
+done
+
 cat > "${OUT}/flash.sh" <<SH
 #!/bin/bash
-# Flash Armada (Xiaomi Pad 6S Pro / sheng) to internal storage.
+# Flash Armada (${DEVICE}) to internal storage.
 # Single-partition layout: NO separate /boot partition -the ostree
 # deployments and boot files live inside the rootfs (/boot directory).
 # Prereqs: unlocked bootloader + TWRP installed, tablet in fastboot mode,
@@ -384,7 +402,7 @@ done
 # armada, ...) still works. Only the *flash* step cares about the name -# booting afterwards is bound by filesystem UUID.
 detect_partition() {
     local cand
-    for cand in ${PARTLABEL_ROOT} Linux linux armada sheng userdata; do
+    for cand in ${PARTLABEL_ROOT} Linux linux armada sheng thyme userdata; do
         if fastboot getvar "partition-type:\${cand}" 2>/dev/null | grep -q "partition-type:\${cand}"; then
             echo "\${cand}"
             return 0
@@ -404,10 +422,8 @@ ROOT_PART=\$(detect_partition) || {
 }
 echo "==> Using partition '\${ROOT_PART}' for the rootfs"
 
-echo "[1/3] flash boot_b (Android boot image)"
-fastboot erase dtbo_b
-fastboot flash boot_b boot_b.img
-
+echo "[1/3] flash Android boot image (${BOOT_PARTS})"
+${DTBO_ERASE_LINES}${BOOT_FLASH_LINES}
 echo "[2/3] flash \${ROOT_PART} (ext4 rootfs, includes /boot)"
 fastboot flash "\${ROOT_PART}" linux.img
 
@@ -420,13 +436,14 @@ chmod 0755 "${OUT}/flash.sh"
 # The same thing for Windows, where most people will actually flash this: the
 # tablet has to be in fastboot on a PC, and requiring git-bash there is a
 # pointless extra hop. Written with CRLF line endings (sed below) because cmd
-# chokes on bare-LF batch files.
-cat > "${OUT}/flash.bat" <<'BAT'
+# chokes on bare-LF batch files. The boot/dtbo fastboot lines are generated
+# per device profile (quoted heredocs cannot expand them).
+cat > "${OUT}/flash.bat" <<'BATHEAD'
 @echo off
 setlocal
 cd /d "%~dp0"
 
-echo Armada (Xiaomi Pad 6S Pro / sheng) - internal storage flash
+echo Armada (@DEVICE@) - internal storage flash
 echo.
 echo WARNING: this ERASES the userdata partition (Android data). Back it up first.
 echo.
@@ -445,9 +462,15 @@ if errorlevel 1 (
     exit /b 1
 )
 
-echo [2/3] Flashing boot_b (Android boot image)...
-fastboot erase dtbo_b
-fastboot flash boot_b boot_b.img
+echo [2/3] Flashing Android boot image...
+BATHEAD
+for p in ${DTBO_PARTS}; do
+    printf 'fastboot erase %s\n' "${p}" >> "${OUT}/flash.bat"
+done
+for p in ${BOOT_PARTS}; do
+    printf 'fastboot flash %s boot_b.img\n' "${p}" >> "${OUT}/flash.bat"
+done
+cat >> "${OUT}/flash.bat" <<'BATTAIL'
 if errorlevel 1 goto fail
 
 echo [3/3] Flashing userdata (ext4 rootfs with /boot inside; this takes a while)...
@@ -464,8 +487,8 @@ echo.
 echo ERROR: fastboot reported a failure. The device is likely still in fastboot mode;
 echo fix the problem and re-run this script.
 exit /b 1
-BAT
-sed -i 's/$/\r/' "${OUT}/flash.bat"
+BATTAIL
+sed -i "s/@DEVICE@/${DEVICE}/g; s/\$/\r/" "${OUT}/flash.bat"
 chmod 0644 "${OUT}/flash.bat"
 
 # The images were written by root (loop devices); hand them to the caller.

@@ -29,6 +29,7 @@ case "$model" in
     "KONKR Pocket FIT Elite") profile=konkr-pocket-fit-elite ;;
     "AYN Odin 3") profile=ayn-odin-3 ;;
     "Xiaomi Pad 6S Pro"*) profile=sm8550-xiaomi-sheng ;;
+    "Xiaomi Mi 10S"*) profile=sm8250-xiaomi-thyme ;;
     "Retroid Pocket 5") profile=retroid-pocket-5 ;;
     "Retroid Pocket 5 Visionox") profile=retroid-pocket-5-visionox ;;
     "Retroid Pocket Flip2") profile=retroid-pocket-flip2 ;;

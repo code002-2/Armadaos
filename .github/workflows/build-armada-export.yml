@@ -17,16 +17,21 @@ on:
   workflow_dispatch:
     inputs:
       container_ref:
-        description: "Armada container to export (ghcr ref:tag)"
+        description: "Armada container to export (ghcr ref:tag; empty = derive from device)"
         type: string
-        default: "ghcr.io/code002-2/armada-sheng:sheng-latest"
+        default: ""
+      device:
+        description: "Target device (selects boot.img geometry, DTB and flash scripts)"
+        type: choice
+        options: [sm8550-xiaomi-sheng, sm8250-xiaomi-thyme]
+        default: sm8550-xiaomi-sheng
       console_mode:
         description: "quiet = armada splash; verbose = loglevel=7 console (diagnose boot hangs)"
         type: choice
         options: [quiet, verbose]
         default: quiet
       publish_release:
-        description: "Publish the flashable to a GitHub Release (overwrites the 'sheng-flashable' tag)"
+        description: "Publish the flashable to a GitHub Release (overwrites the '<device>-flashable' tag)"
         type: boolean
         default: false
 
@@ -64,13 +69,22 @@ jobs:
 
       - name: Export and package
         env:
-          REF: ${{ inputs.container_ref }}
+          DEVICE: ${{ inputs.device }}
           ROOT_PART: userdata
           MODE: ${{ inputs.console_mode }}
         run: |
           set -euxo pipefail
+          # Derive the default container ref from the device when unset.
+          REF="${{ inputs.container_ref }}"
+          if [ -z "${REF}" ]; then
+            case "${DEVICE}" in
+              sm8250-xiaomi-thyme) REF="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/${{ github.event.repository.name }}:thyme-latest" ;;
+              *) REF="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/${{ github.event.repository.name }}:sheng-latest" ;;
+            esac
+          fi
+          echo "Exporting ${REF} for ${DEVICE}"
           sudo bash .github/scripts/armada-export-flashable.sh \
-            "${REF}" "${{ github.workspace }}/output" "${ROOT_PART}" "${MODE}"
+            "${REF}" "${{ github.workspace }}/output" "${ROOT_PART}" "${MODE}" "${DEVICE}"
           sudo chown -R "$(id -u):$(id -g)" output
           ls -lh output/
 
@@ -112,19 +126,21 @@ jobs:
         if: ${{ inputs.publish_release }}
         uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
         with:
-          tag_name: sheng-flashable
-          name: "Armada sheng flashable (no OTA)"
+          tag_name: ${{ inputs.device }}-flashable
+          name: "Armada ${{ inputs.device }} flashable (no OTA)"
           body: |
-            ## Armada for Xiaomi Pad 6S Pro (sheng) — flashable, no OTA
+            ## Armada for ${{ inputs.device }} — flashable, no OTA
 
             Single-system fastboot install (`userdata` partition, Android erased).
+            Run `flash.sh` (or `flash.bat` on Windows) — it applies the correct
+            boot partitions for this device (${{ inputs.device }}).
 
             **Files:**
-            - `boot_b.img` — kernel + initramfs + DTB (Android header-v0)
+            - `boot_b.img` — kernel + initramfs + DTB (Android boot image; geometry per device)
             - `rootfs.img.part.*` — ext4 rootfs (shrunk to actual size) split into ~1.9 GB chunks (GitHub caps single files at 2 GB)
             - `merge-rootfs.sh` — Linux: merges the chunks back into `rootfs.img` + verifies checksums
             - `merge-rootfs.bat` — **Windows**: merges the chunks (`copy /b`) — 双击即可
-            - `flash.sh` — Linux/Mac: fastboot wrapper (erase dtbo_b → flash boot_b → erase+flash userdata → reboot)
+            - `flash.sh` — Linux/Mac: fastboot wrapper (boot partitions → erase+flash userdata → reboot)
             - `flash.bat` — **Windows**: 一键刷入脚本 (double-click) — 需要 platform-tools 的 fastboot.exe
             - `MANIFEST.txt` — build metadata
 
@@ -136,15 +152,7 @@ jobs:
             3. 设备进入 fastboot (USB + 长按 POWER+VOL-;或 adb reboot bootloader)
             4. 双击 `flash.bat` → 自动刷写并重启
 
-            **Linux/Mac:**
-            ```
-            ./merge-rootfs.sh          # produces rootfs.img (or: cat rootfs.img.part.* > rootfs.img)
-            fastboot erase dtbo_b
-            fastboot flash boot_b boot_b.img
-            fastboot erase userdata
-            fastboot flash userdata rootfs.img
-            fastboot reboot
-            ```
+            **Linux/Mac:** 直接运行 `./flash.sh`(自动按设备刷写 boot 分区)。
 
             ⚠️ Requires an unlocked bootloader. Back up your data first — this erases Android's userdata.
           files: output/*
