@@ -12,7 +12,7 @@
 <p align="center"><strong>面向安卓设备的 SteamOS 类 Linux 系统</strong></p>
 
 <p align="center">
-  在你的安卓社会上运行 Armada——Steam、FEX、Proton 与完整桌面,
+  在你的安卓设备上运行 Armada——Steam、FEX、Proton 与完整桌面,
   直接刷入设备内部存储,**不含 bootc/OSTree/OTA**。
 </p>
 
