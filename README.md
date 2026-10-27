@@ -7,14 +7,6 @@
   </a>
 </p>
 
-<h1 align="center">Armada (sheng / thyme)</h1>
-
-<p align="center"><strong>面向小米平板 6S Pro 与小米 10S 的 SteamOS 类 Linux 系统</strong></p>
-
-<p align="center">
-  在小米平板 6S Pro(<code>sheng</code>,SM8550)与小米 10S(<code>thyme</code>,SM8250)上
-  运行 Armada——Steam、FEX、Proton 与完整桌面,直接刷入设备内部存储,
-  **不含 bootc/OSTree/OTA**。
 </p>
 
 <p align="center">
@@ -31,29 +23,10 @@
 
 ## 关于本构建
 
-这是 Armada 的**小米设备修改版**(sheng + thyme 双设备),与上游 Armada 有两处刻意差异:
 
-1. **无 bootc / OSTree / OTA。** 移除了上游基于镜像的系统更新链路。根文件系统是
+ **无 bootc / OSTree / OTA。** 移除了上游基于镜像的系统更新链路。根文件系统是
    **普通 ext4 分区**,通过 `fastboot` 刷写——升级方式为**重新刷写**,而非原地更新。
-2. **设备专属内核**,按设备取自社区 mainline 代码树,并烘焙设备修复(见下文):
-   - sheng:[ianchb/sm8550-mainline](https://github.com/ianchb/sm8550-mainline) @ `sheng-7.2.2`
-   - thyme:[yuweiyuan8/linux-xiaomi-thyme-mainline](https://github.com/yuweiyuan8/linux-xiaomi-thyme-mainline)
-     @ `master`(mainline 7.2.0-rc5)
 
-其余均与 Armada 相同:ARM64 Steam(FEX 翻译 + Proton 兼容)、游戏模式、KDE Plasma
-桌面、Decky 插件、Waydroid,以及 Armada 设备服务。
-
-### 已实测可用的功能
-
-**sheng(小米平板 6S Pro)**
-
-| 组件 | 状态 |
-|---|---|
-| 启动(原厂 ABL、`boot_b.img`、header-v0 cmdline `root=PARTLABEL=`) | ✅ 可进入 Steam |
-| 触摸屏(Novatek NT36532E) | ✅ 通过 `xiaomi-sheng-thp`(用户态 THP → uinput) |
-| 音频(6× CS35L43 + WCD938X,经 QDSP6) | ✅ 通过 sheng UCM2(`alsa-ucm-conf`) |
-| USB gadget ECM 网络(sshd) | ✅ |
-| WiFi / KDE Plasma 桌面 / Steam 离线回退 | ✅ |
 
 **thyme(小米 10S)** — 首版移植,组件状态:
 
