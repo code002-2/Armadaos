@@ -416,6 +416,49 @@ build-sheng-flashable $kernel_pkg $tag=default_tag:
     just _build-bib "armada" "{{ tag }}" raw disk_config/disk-sheng.toml
     just export-fastboot-images sm8550-xiaomi-sheng output/image/disk.raw output/fastboot
 
+# ===========================================================================
+# Thyme (Xiaomi Mi 10S) — internal-storage / fastboot flashable images
+# ===========================================================================
+# The thyme kernel comes from yuweiyuan8/linux-xiaomi-thyme-mainline
+# (7.2.0-rc5 mainline port), packaged exactly like armada-packages' kernel
+# tarball, consumed via the KERNEL_PKG build arg. Produce the kernel image
+# locally with:
+#   just build-thyme-kernel          # -> localhost/armada-thyme-kernel:7.2.0-rc5
+# Then:
+#   just build-thyme-flashable localhost/armada-thyme-kernel:7.2.0-rc5
+# KERNEL_SRC=/path/to/tree overrides the clone (local porting checkout).
+
+[group('Build Thyme (Xiaomi Mi 10S)')]
+build-thyme-kernel $tag="7.2.0-rc5":
+    #!/usr/bin/env bash
+    set -euxo pipefail
+    rm -rf kernel-thyme/out
+    ./kernel-thyme/build.sh "$(pwd)/kernel-thyme/out"
+    podman build --platform linux/arm64 -t localhost/armada-thyme-kernel:{{ tag }} kernel-thyme
+
+[group('Build Thyme (Xiaomi Mi 10S)')]
+build-thyme-image $kernel_pkg $target_image=image_name $tag=default_tag:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    ARMADA_VERSION="$(TZ=America/New_York date +%Y%m%d).$(git rev-parse --short HEAD)"
+    podman build \
+        --build-arg ARMADA_VERSION="${ARMADA_VERSION}" \
+        --build-arg ARMADA_DEVICE=sm8250-xiaomi-thyme \
+        --build-arg KERNEL_PKG="{{ kernel_pkg }}" \
+        --platform linux/arm64 \
+        --pull=newer \
+        --target armada-rootfs \
+        --tag "{{ target_image }}:{{ tag }}" \
+        .
+
+[group('Build Thyme (Xiaomi Mi 10S)')]
+build-thyme-flashable $kernel_pkg $tag=default_tag:
+    #!/usr/bin/env bash
+    set -euxo pipefail
+    just build-thyme-image "{{ kernel_pkg }}" "armada" "{{ tag }}"
+    just _build-bib "armada" "{{ tag }}" raw disk_config/disk-thyme.toml
+    just export-fastboot-images sm8250-xiaomi-thyme output/image/disk.raw output/fastboot
+
 lint:
     #!/usr/bin/env bash
     set -eoux pipefail

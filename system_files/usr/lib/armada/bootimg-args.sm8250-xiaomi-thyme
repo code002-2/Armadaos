@@ -1,0 +1,9 @@
+# Vendor-ABL geometry for the original Xiaomi bootloader (thyme, Mi 10S),
+# verified on-device: header v1, 2048-byte pages, kernel and tags at
+# 0x10000000, DTB appended after the gzip stream (the ABL scans it and
+# matches qcom,msm-id/board-id). A mismatch ships an unbootable boot image.
+ARMADA_BOOTIMG_ARGS="--base 0x00000000 --pagesize 2048 --kernel_offset 0x10000000 --tags_offset 0x10000000 --header_version 1"
+
+# header-v1 cmdline is 512 bytes (extra_cmdline has 1024, but keep the same
+# conservative cap as sheng until the ABL's overflow handling is confirmed).
+ARMADA_CMDLINE_MAX=512

@@ -103,6 +103,11 @@ COPY system_files /system_files/
 
 FROM ${BASE_IMAGE} AS armada-rootfs
 ARG ARMADA_VERSION=unknown
+# Device variant baked into this container (sm8550-xiaomi-sheng or
+# sm8250-xiaomi-thyme); build_files/build.sh runs the matching device-fixes
+# steps. The thyme pipeline overrides it (just build-thyme-image /
+# build-thyme-container.yml).
+ARG ARMADA_DEVICE=sm8550-xiaomi-sheng
 LABEL org.opencontainers.image.version="${ARMADA_VERSION}"
 
 RUN --mount=type=bind,from=ctx,source=/,target=/ctx \
@@ -139,7 +144,7 @@ RUN --mount=type=bind,from=ctx,source=/,target=/ctx \
     --mount=type=tmpfs,dst=/tmp \
     mkdir -p /usr/lib/armada && \
     printf '%s\n' "${ARMADA_VERSION}" >/usr/lib/armada/version && \
-    /ctx/build_files/build.sh
+    ARMADA_DEVICE="${ARMADA_DEVICE}" /ctx/build_files/build.sh
 
 RUN bootc container lint
 

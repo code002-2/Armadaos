@@ -1,0 +1,5 @@
+FROM scratch
+# Packages the tarball build.sh leaves in kernel-thyme/out/ into the OCI
+# image the rootfs build mounts at /packages/kernel (see 20-install-kernel.sh
+# and the `from=kernel,source=/kernel` mount in the root Containerfile).
+ADD out/ /kernel/

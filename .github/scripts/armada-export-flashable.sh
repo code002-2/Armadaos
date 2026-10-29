@@ -8,22 +8,46 @@
 # / steamos-select-branch are replaced by a notice (no bootc deployment to
 # update; re-flash to upgrade) — everything else stays identical.
 #
-# Boot chain (debian-sheng style, verified on this device):
-#   boot_b.img (header-v0, kernel+initramfs+DTB, cmdline root=PARTLABEL=<p>)
-#   -> single ext4 root (growfs), /boot inside the root
+# Boot chain (vendor-ABL style, verified on the device):
+#   boot_b.img (Android boot image, kernel+initramfs+DTB appended,
+#   cmdline root=PARTLABEL=<p>) -> single ext4 root (growfs), /boot inside
+#   the root. Geometry per device: sheng = header-v0/4096, thyme =
+#   header-v1/2048 (see system_files/usr/lib/armada/bootimg-args.*).
 #
 # Single-system only: the root partition is the Android 'userdata' partition
 # (Android erased); no dual-boot support.
 #
 # Runs on the runner as root. Usage:
-#   armada-export-flashable.sh <ghcr-ref> <output-dir> <root-partition> <quiet|verbose>
+#   armada-export-flashable.sh <ghcr-ref> <output-dir> <root-partition> <quiet|verbose> [device]
+# device defaults to sm8550-xiaomi-sheng; thyme = sm8250-xiaomi-thyme.
 set -euxo pipefail
 
 REF="${1:?container ref}"
 OUT="${2:?output dir}"
 ROOT_PART="${3:?root partition name}"
 MODE="${4:-quiet}"
+DEVICE="${5:-${ARMADA_DEVICE:-sm8550-xiaomi-sheng}}"
 IMG_SIZE="${IMG_SIZE:-16G}"
+
+REPO="$(cd "$(dirname "$0")/../.." && pwd)"
+DEV_LIB="$REPO/system_files/usr/lib/armada"
+DEV_CONF="$DEV_LIB/devices/${DEVICE}.conf"
+DTB_LIST_SRC="$DEV_LIB/supported-dtbs.${DEVICE}"
+ARGS_SRC="$DEV_LIB/bootimg-args.${DEVICE}"
+[ -r "$DEV_CONF" ] || { echo "ERROR: no device profile: $DEV_CONF"; exit 1; }
+[ -r "$DTB_LIST_SRC" ] || { echo "ERROR: no DTB list: $DTB_LIST_SRC"; exit 1; }
+[ -r "$ARGS_SRC" ] || { echo "ERROR: no bootimg args: $ARGS_SRC"; exit 1; }
+# Device profile: geometry + boot/dtbo partition lists (thyme flashes both
+# A/B slots and does not erase dtbo; sheng's defaults are kept below).
+# shellcheck source=/dev/null
+. "$DEV_CONF"
+BOOT_PARTS="${ARMADA_BOOT_PARTS:-boot_b}"
+DTBO_PARTS="${ARMADA_DTBO_PARTS:-dtbo_b}"
+# shellcheck source=/dev/null
+. "$ARGS_SRC"
+DEVICE_BOOTIMG_ARGS="${ARMADA_BOOTIMG_ARGS}"
+DEVICE_DTB="$(head -1 "$DTB_LIST_SRC")"
+[ -n "$DEVICE_DTB" ] || { echo "ERROR: empty DTB list: $DTB_LIST_SRC"; exit 1; }
 
 ROOTFS="$OUT/rootfs.img"
 MNT="$OUT/mnt"
@@ -91,46 +115,78 @@ KVER=$(ls "$MNT/usr/lib/modules" | head -1)
 [ -n "$KVER" ] || { echo "no kernel under /usr/lib/modules"; exit 1; }
 VMLINUZ="$MNT/usr/lib/modules/$KVER/vmlinuz"
 INITRD="$MNT/usr/lib/modules/$KVER/initramfs.img"
-DTB="$MNT/usr/lib/modules/$KVER/dtb/qcom/sm8550-xiaomi-sheng.dtb"
+DTB="$MNT/usr/lib/modules/$KVER/dtb/qcom/${DEVICE_DTB}.dtb"
 [ -f "$VMLINUZ" ] || VMLINUZ=$(find "$MNT/boot" -maxdepth 1 -name 'vmlinuz-*' | head -1)
 [ -f "$INITRD" ] || INITRD=$(find "$MNT/boot" -maxdepth 1 -name 'initramfs-*.img' | head -1)
 [ -f "$DTB" ] || { echo "DTB missing ($DTB)"; find "$MNT/usr/lib/modules/$KVER" -name '*.dtb' | head; exit 1; }
 
 echo "==> [5b] Touchscreen chain audit (for MANIFEST/diagnosis)"
-( cd "$MNT/usr/lib/modules/$KVER" && \
-  echo "--- goodix/berlin modules:"; find . -iname '*goodix*' -o -iname '*berlin*' | head; \
-  echo "--- touch firmware:"; find "$MNT"/lib/firmware -iname '*gt9*' -o -iname '*shen*' | head -12; \
-  echo "--- dts touch node:"; strings "$DTB" | grep -i -E 'goodix|touch|berlin' | head -8; \
-  echo "--- usb gadget modules:"; find . -path '*gadget*' -name '*.ko*' | head -8 ) 2>&1 | tee "$OUT/touchchain.log"
+case "$DEVICE" in
+    sm8550-xiaomi-sheng)
+        ( cd "$MNT/usr/lib/modules/$KVER" && \
+          echo "--- goodix/berlin modules:"; find . -iname '*goodix*' -o -iname '*berlin*' | head; \
+          echo "--- touch firmware:"; find "$MNT"/lib/firmware -iname '*gt9*' -o -iname '*shen*' | head -12; \
+          echo "--- dts touch node:"; strings "$DTB" | grep -i -E 'goodix|touch|berlin' | head -8; \
+          echo "--- usb gadget modules:"; find . -path '*gadget*' -name '*.ko*' | head -8 ) 2>&1 | tee "$OUT/touchchain.log"
+        ;;
+    sm8250-xiaomi-thyme)
+        ( cd "$MNT/usr/lib/modules/$KVER" && \
+          echo "--- st-fts modules:"; find . -iname '*fts*' -o -iname '*stfts*' | head; \
+          echo "--- touch firmware:"; find "$MNT"/usr/lib/firmware -iname '*ftb*' -o -iname '*fts*' | head -12; \
+          echo "--- dts touch node:"; strings "$DTB" | grep -i -E 'fts|touch' | head -8; \
+          echo "--- audio firmware:"; ls "$MNT/usr/lib/firmware/cirrus" 2>/dev/null | head -8; \
+          echo "--- usb gadget modules:"; find . -path '*gadget*' -name '*.ko*' | head -8 ) 2>&1 | tee "$OUT/touchchain.log"
+        ;;
+esac
 
-echo "==> [5c] Firmware guaranteed-injection (novatek/cirrus/sheng, verbatim)"
-git clone --depth 1 -q https://github.com/ianchb/sheng-firmware /tmp/sheng-fw
-cp -a /tmp/sheng-fw/. "$MNT/usr/lib/firmware/"
-rm -rf /tmp/sheng-fw
-# nt36532e driver's BOOT_UPDATE_FIRMWARE_NAME is hardcoded to
-# "novatek/nt36532e.bin" while the DTS firmware-name points at the csot bin;
-# provide both names so the auto-firmware-recovery path finds its file.
-if [ -f "$MNT/usr/lib/firmware/novatek/novatek_nt36532_n81a_fw_csot.bin" ]; then
-  cp "$MNT/usr/lib/firmware/novatek/novatek_nt36532_n81a_fw_csot.bin" \
-     "$MNT/usr/lib/firmware/novatek/nt36532e.bin"
-  echo "alias firmware: novatek/nt36532e.bin created"
+echo "==> [5c] Firmware guaranteed-injection (sheng only; thyme fw is committed)"
+if [ "$DEVICE" = "sm8550-xiaomi-sheng" ]; then
+    git clone --depth 1 -q https://github.com/ianchb/sheng-firmware /tmp/sheng-fw
+    cp -a /tmp/sheng-fw/. "$MNT/usr/lib/firmware/"
+    rm -rf /tmp/sheng-fw
+    # nt36532e driver's BOOT_UPDATE_FIRMWARE_NAME is hardcoded to
+    # "novatek/nt36532e.bin" while the DTS firmware-name points at the csot bin;
+    # provide both names so the auto-firmware-recovery path finds its file.
+    if [ -f "$MNT/usr/lib/firmware/novatek/novatek_nt36532_n81a_fw_csot.bin" ]; then
+        cp "$MNT/usr/lib/firmware/novatek/novatek_nt36532_n81a_fw_csot.bin" \
+           "$MNT/usr/lib/firmware/novatek/nt36532e.bin"
+        echo "alias firmware: novatek/nt36532e.bin created"
+    fi
+else
+    # thyme: umi DSP set + CS35L41 tuning + ath11k QCA6390 + qca BT nv are
+    # vendored in system_files/usr/lib/firmware and installed by the
+    # container build (20-install-kernel copies the tree); the ST FTS
+    # touch firmware ships from the vendor image the same way. Only audit.
+    echo "--- thyme firmware:"; ls "$MNT/usr/lib/firmware/qcom/sm8250/umi" 2>/dev/null | head -8
+    ls "$MNT/usr/lib/firmware/ath11k/QCA6390/hw2.0" 2>/dev/null | head -5
 fi
 echo "firmware files: $(find "$MNT/usr/lib/firmware" -type f | wc -l)"
-ls "$MNT/usr/lib/firmware/novatek" "$MNT/usr/lib/firmware/cirrus" 2>&1 | head -8
 
-echo "==> [5d] sheng ALSA UCM2 inject + audio audit"
-REPO="$(cd "$(dirname "$0")/../.." && pwd)"
+echo "==> [5d] ALSA UCM2 inject + audio audit"
 mkdir -p "$MNT/usr/share/alsa/ucm2"
 cp -a "$REPO/system_files/usr/share/alsa/ucm2/." "$MNT/usr/share/alsa/ucm2/"
 {
-  echo "--- sheng UCM2:"; ls "$MNT/usr/share/alsa/ucm2/Xiaomi/sheng/" 2>&1 | head;
-  echo "--- sm8550 firmware dirs:"; ls "$MNT/usr/lib/firmware/qcom/sm8550/" 2>&1 | head;
-  echo "--- sheng-specific firmware:"; ls "$MNT/usr/lib/firmware/qcom/sm8550/sheng" 2>&1 | head;
-  echo "--- adsp blobs:"; find "$MNT/usr/lib/firmware" -name 'adsp.b00' | head;
-  echo "--- audio codec/amp modules:"; find "$MNT/usr/lib/modules/$KVER" -iname '*wsa88*' -o -iname '*wcd93*' | head -8;
+  case "$DEVICE" in
+    sm8550-xiaomi-sheng)
+      echo "--- sheng UCM2:"; ls "$MNT/usr/share/alsa/ucm2/Xiaomi/sheng/" 2>&1 | head
+      echo "--- sm8550 firmware dirs:"; ls "$MNT/usr/lib/firmware/qcom/sm8550/" 2>&1 | head
+      echo "--- sheng-specific firmware:"; ls "$MNT/usr/lib/firmware/qcom/sm8550/sheng" 2>&1 | head
+      echo "--- adsp blobs:"; find "$MNT/usr/lib/firmware" -name 'adsp.b00' | head
+      echo "--- audio codec/amp modules:"; find "$MNT/usr/lib/modules/$KVER" -iname '*wsa88*' -o -iname '*wcd93*' | head -8
+      ;;
+    sm8250-xiaomi-thyme)
+      echo "--- thyme UCM2:"; ls "$MNT/usr/share/alsa/ucm2/conf.d/sm8250/" 2>&1 | head
+      echo "--- umi DSP firmware:"; ls "$MNT/usr/lib/firmware/qcom/sm8250/umi/" 2>&1 | head
+      echo "--- cirrus firmware:"; ls "$MNT/usr/lib/firmware/cirrus/" 2>&1 | head -8
+      echo "--- audio codec/amp modules:"; find "$MNT/usr/lib/modules/$KVER" -iname '*cs35l41*' -o -iname '*wcd93*' | head -8
+      ;;
+  esac
 } 2>&1 | tee -a "$OUT/touchchain.log"
 
 echo "==> [5f] Steam offline fallback wrapper"
+# The container build already bakes /usr/bin/steam-now (52-*-device-fixes);
+# only older exports need it injected here.
+if [ ! -x "$MNT/usr/bin/steam-now" ]; then
 cat > "$MNT/usr/local/bin/steam-now" <<'EOF'
 #!/bin/bash
 # Launch Steam big picture; probe the Steam CDN briefly and fall back to
@@ -145,13 +201,16 @@ else
 fi
 EOF
 chmod 0755 "$MNT/usr/local/bin/steam-now"
+fi
 
+if [ "$DEVICE" = "sm8550-xiaomi-sheng" ]; then
 echo "==> [5g] xiaomi-sheng-thp: NT36532E userspace touch -> uinput"
 # The in-kernel nt36532e driver only downloads firmware and publishes raw THP
 # frame streams (/proc/nvt_thp_raw, /proc/nvt_thp_stream, ...); it registers
 # NO input device. ianchb/xiaomi-sheng-thp consumes that stream and creates
 # standard uinput devices (multitouch / Focus Pen). Vendored here as the
 # official arm64 .deb pair (thp + libssc, which provides libssc.so.2).
+# (thyme's ST FTS touch is a normal in-kernel input device; no daemon.)
 THP_VEND="$REPO/build_files/vendor/xiaomi-sheng-thp"
 THP_DEB="$THP_VEND/xiaomi-sheng-thp_0.3.9_arm64.deb"
 LIBSSC_DEB="$THP_VEND/libssc_0.4.2-1_arm64.deb"
@@ -194,6 +253,7 @@ systemctl --root "$MNT" enable xiaomi-sheng-thp.service 2>/dev/null || true
 echo "xiaomi-sheng-thp: $(ls -l "$MNT/usr/libexec/xiaomi-sheng-thp/" | tail -1)"
 ls "$MNT/usr/lib64/libssc.so.2" "$MNT/usr/lib64/libqmi-glib.so.5" \
    "$MNT/usr/lib64/libqrtr-glib.so.0" "$MNT/usr/lib64/libprotobuf-c.so.1" 2>&1
+fi
 
 echo "==> [5e] Enable remote access (sshd; USB gadget network if supported)"
 systemctl --root "$MNT" enable sshd.service 2>/dev/null || true
@@ -252,10 +312,11 @@ CMDLINE="root=PARTLABEL=${ROOT_PART} rw rootwait console=tty0"
 [ "$MODE" = "quiet" ] && CMDLINE="$CMDLINE quiet" || CMDLINE="$CMDLINE loglevel=7"
 gzip -c "$VMLINUZ" > /tmp/kernel.gz
 cat "$DTB" >> /tmp/kernel.gz
+# Geometry from the device profile (sheng: header-v0/4096;
+# thyme: header-v1/2048, kernel/tags 0x10000000).
 python3 "$(dirname "$0")/../../build_files/vendor/mkbootimg/mkbootimg.py" \
     --kernel /tmp/kernel.gz --ramdisk "$INITRD" \
-    --base 0x00000000 --pagesize 4096 --kernel_offset 0x00008000 \
-    --tags_offset 0x01e00000 --header_version 0 \
+    ${DEVICE_BOOTIMG_ARGS} \
     --os_patch_level "$(date '+%Y-%m')" --cmdline "$CMDLINE" \
     -o "$OUT/boot_b.img"
 rm -f /tmp/kernel.gz
@@ -283,16 +344,27 @@ e2fsck -f -y "$ROOTFS" >/dev/null 2>&1 || true
 echo "rootfs.img logical size: $(stat -c %s "$ROOTFS") bytes ($(du -h "$ROOTFS" | cut -f1))"
 
 echo "==> [7/7] flash.sh + flash.bat + checksums"
+# Boot/dtbo fastboot lines, unrolled per device profile into the generated
+# scripts (thyme flashes both A/B slots and leaves dtbo alone; sheng erases
+# dtbo_b and flashes boot_b only).
+BOOT_FLASH_LINES=""
+for p in $BOOT_PARTS; do
+    BOOT_FLASH_LINES+="fastboot flash ${p} boot_b.img"$'\n'
+done
+DTBO_ERASE_LINES=""
+for p in $DTBO_PARTS; do
+    DTBO_ERASE_LINES+="fastboot erase ${p}"$'\n'
+done
+
 cat > "$OUT/flash.sh" <<SH
 #!/bin/bash
-# Flash Armada (exported container, no-OTA) to the Xiaomi Pad 6S Pro.
+# Flash Armada (exported container, no-OTA) to the ${ARMADA_DEVICE_NAME:-$DEVICE}.
 # Single-system: root goes into the Android 'userdata' partition (Android erased).
 set -euo pipefail
 cd "\$(dirname "\$0")"
 sha256sum -c SHA256SUMS
 echo "==> using partition ${ROOT_PART} (single-system, Android erased)"
-fastboot erase dtbo_b
-fastboot flash boot_b boot_b.img
+${DTBO_ERASE_LINES}${BOOT_FLASH_LINES}
 fastboot erase ${ROOT_PART}
 fastboot flash ${ROOT_PART} rootfs.img
 fastboot reboot
@@ -300,13 +372,15 @@ SH
 chmod +x "$OUT/flash.sh"
 
 # Windows flash helper (most users are on Windows): .bat with UTF-8 output.
-cat > "$OUT/flash.bat" <<BAT
+# Header/tail are quoted heredocs (batch %-syntax must not expand); the
+# per-device boot flash lines are generated between them.
+cat > "$OUT/flash.bat" <<'BATHEAD'
 @echo off
 chcp 65001 >nul
-title Armada sheng flash (one-click)
+title Armada @DEVICE@ flash (one-click)
 echo.
 echo  ==========================================
-echo   Armada sheng 一键刷入 (单系统, 擦除 Android)
+echo   Armada @DEVICE@ 一键刷入 (单系统, 擦除 Android)
 echo  ==========================================
 echo.
 if not exist fastboot.exe (
@@ -337,9 +411,15 @@ for %%F in (boot_b.img rootfs.img) do (
 echo.
 echo  [2/5] 等待设备连接...
 fastboot devices
-echo  [3/5] 擦除 dtbo_b 并刷入 boot_b...
-fastboot erase dtbo_b
-fastboot flash boot_b boot_b.img
+echo  [3/5] 刷入 Android boot 镜像...
+BATHEAD
+for p in $DTBO_PARTS; do
+    printf 'fastboot erase %s\n' "$p" >> "$OUT/flash.bat"
+done
+for p in $BOOT_PARTS; do
+    printf 'fastboot flash %s boot_b.img\n' "$p" >> "$OUT/flash.bat"
+done
+cat >> "$OUT/flash.bat" <<'BATTAIL'
 echo  [4/5] 擦除并刷入 userdata (rootfs.img, 耗时较长请勿断开)...
 fastboot erase userdata
 fastboot flash userdata rootfs.img
@@ -351,17 +431,27 @@ echo  登录: 用户 armada  密码 armada  (登录后请立即修改密码)
 echo  提示: 若提示 "waiting for device", 请确认设备已进入 fastboot 模式
 echo        (USB 连接 + 长按 POWER+VOL- 或 adb reboot bootloader).
 pause
-BAT
+BATTAIL
+sed -i "s/@DEVICE@/${DEVICE}/g" "$OUT/flash.bat"
 echo "flash.bat + flash.sh generated"
 
 cd "$OUT"
 sha256sum boot_b.img rootfs.img flash.sh flash.bat > SHA256SUMS
 {
   echo "Armada (container-exported, no OTA) — ${REF}"
+  echo "device: ${ARMADA_DEVICE_NAME:-$DEVICE} (${DEVICE})"
   echo "root: PARTLABEL=${ROOT_PART} ext4 growfs (single partition)"
-  echo "boot: boot_b.img header-v0; cmdline: ${CMDLINE}"
+  echo "boot: boot_b.img ${DEVICE_BOOTIMG_ARGS}; cmdline: ${CMDLINE}"
   echo "kernel: ${KVER}"
-  echo "touch: xiaomi-sheng-thp 0.3.9 (userspace NT36532E -> uinput) + libssc 0.4.2-1"
+  case "$DEVICE" in
+      sm8550-xiaomi-sheng)
+          echo "touch: xiaomi-sheng-thp 0.3.9 (userspace NT36532E -> uinput) + libssc 0.4.2-1"
+          ;;
+      sm8250-xiaomi-thyme)
+          echo "touch: in-kernel ST FTS (st,fts input device)"
+          echo "audio: UCM2 conf.d/sm8250/XIAOMI-UMI-WCD9380-CS35L41-VA-DMIC (device-validated)"
+          ;;
+  esac
 } > MANIFEST.txt
 ls -lh "$OUT"
 echo "==> DONE"

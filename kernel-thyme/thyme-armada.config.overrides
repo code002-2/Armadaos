@@ -1,0 +1,132 @@
+# Armada runtime fragment merged on top of the thyme tree's board config
+# (arch/arm64/configs/sm8250.config) by kernel-thyme/build.sh.
+#
+# The build script filters the fragment: only symbols the thyme config
+# already defines are merged as-is; the rest are pre-set via scripts/config
+# and kept by olddefconfig when a Kconfig entry backs them. So adding an
+# option here never breaks the merge, and enabling something the board
+# config does not know about is safe.
+#
+# The thyme board config already turns on the device drivers (DRM_MSM,
+# TOUCHSCREEN_ST_FTS, CS35L41, WCD938X, SMB2 charger, ath11k's QCA6390
+# firmware plumbing via qcom,pwrseq); what it lacks is Armada's runtime
+# (game stack, FEX, bootc tooling, selinux, zram, nftables) and the USB
+# gadget network.
+
+# Stable KVER: the tree sets LOCALVERSION "-sm8250" with
+# CONFIG_LOCALVERSION_AUTO=n already; keep it that way so vermagic — and
+# therefore ccache reuse — stays stable across runs.
+
+# ============== Armada runtime (game stack + FEX) ==============
+# BINFMT_MISC=m is already in the board config (FEX registration).
+CONFIG_OVERLAY_FS=y
+CONFIG_EROFS_FS=m                       # squashfs/fuse payloads
+CONFIG_EROFS_FS_BACKED_BY_FILE=y
+CONFIG_EXFAT_FS=m
+CONFIG_NTFS3_FS=m
+CONFIG_CIFS=m
+CONFIG_NLS_UTF8=y
+CONFIG_SQUASHFS_ZSTD=y
+# BTRFS_FS=y already in the board config (bootc root default).
+
+# ============== bootc / ostree / systemd ==============
+CONFIG_FANOTIFY=y                       # ostree file-change tracking
+CONFIG_USER_NS=y
+CONFIG_PID_NS=y
+CONFIG_NET_NS=y
+CONFIG_SECURITY=y
+CONFIG_SECURITY_NETWORK=y               # hard dep of SECURITY_SELINUX
+CONFIG_SECURITY_SELINUX=y
+CONFIG_BPF_SYSCALL=y
+CONFIG_CGROUP_BPF=y
+# SYSFB_SIMPLEFB / FRAMEBUFFER_CONSOLE_DEFERRED_TAKEOVER stay OFF (the
+# known-good thyme config disables both): deferred takeover blanks fbcon
+# until userspace writes, hiding early-boot panics behind a black screen.
+CONFIG_RD_ZSTD=y
+
+# ============== Waydroid ==============
+CONFIG_ANDROID_BINDER_IPC=y             # already in the board config
+CONFIG_ANDROID_BINDERFS=y
+CONFIG_PSI=y                             # lmkd memory-pressure monitoring
+CONFIG_PSI_DEFAULT_DISABLED=y            # opt in with psi=1
+CONFIG_IPV6=y
+CONFIG_IPV6_MULTIPLE_TABLES=y
+CONFIG_XFRM_USER=y
+
+# ============== Gaming performance ==============
+CONFIG_SCHED_CLASS_EXT=y                 # sched_ext, scx_lavd/cosmos
+CONFIG_UCLAMP_TASK=y                     # armada-powerd cpu.uclamp.min per game
+CONFIG_UCLAMP_TASK_GROUP=y
+CONFIG_NTSYNC=y                          # Proton NT sync; off in most arm64 configs
+CONFIG_LRU_GEN=y
+CONFIG_LRU_GEN_ENABLED=y
+CONFIG_TRANSPARENT_HUGEPAGE_MADVISE=y    # not ALWAYS, which bloats FEX RAM
+
+# ============== HID / gamepads (external controllers via Bluetooth/USB) ====
+CONFIG_INPUT_UINPUT=y                    # already in the board config
+CONFIG_HIDRAW=y
+CONFIG_UHID=y
+CONFIG_HID_MICROSOFT=y
+CONFIG_HID_STEAM=m
+CONFIG_HID_PLAYSTATION=m
+CONFIG_HID_SONY=m
+CONFIG_HID_NINTENDO=m
+CONFIG_JOYSTICK_XPAD=m
+CONFIG_JOYSTICK_XPAD_FF=y
+CONFIG_JOYSTICK_XPAD_LEDS=y
+
+# ============== WiFi / Bluetooth (QCA6390) ==============
+# The board config does not enable the wireless stack; QCA6390 is PCIe
+# WiFi (ath11k + MHI) and UART6-serdev Bluetooth (hci_qca).
+CONFIG_ATH11K=m
+CONFIG_ATH11K_PCI=m
+CONFIG_MHI_BUS=m
+CONFIG_MHI_BUS_PCI_GENERIC=m
+CONFIG_BT=y
+CONFIG_BT_HCIUART_H4=y
+CONFIG_BT_HCIUART_QCA=y
+CONFIG_BT_QCA=m
+CONFIG_SERIAL_DEV_BUS=y
+
+# ============== USB gadget network (sshd over RNDIS/ECM) ==============
+# The board config has USB_CONFIGFS=y but no network functions; the
+# armada-usbgadget service needs at least RNDIS (Windows) / ECM (Linux).
+CONFIG_USB_CONFIGFS_F_RNDIS=y
+CONFIG_USB_CONFIGFS_F_ECM=y
+
+# ============== Compressed firmware (Fedora/RPM qcom fw is .xz-only) ======
+CONFIG_FW_LOADER_COMPRESS=y
+CONFIG_FW_LOADER_COMPRESS_XZ=y
+CONFIG_FW_LOADER_COMPRESS_ZSTD=y
+
+# ============== ZRAM ==============
+CONFIG_ZSMALLOC=m                        # already in the board config
+CONFIG_ZRAM=m                            # already in the board config
+CONFIG_ZRAM_BACKEND_ZSTD=y
+CONFIG_ZRAM_BACKEND_LZ4=y
+CONFIG_ZRAM_BACKEND_LZO=y
+CONFIG_ZRAM_DEF_COMP_ZSTD=y
+CONFIG_ZRAM_DEF_COMP="zstd"
+CONFIG_CRYPTO_ZSTD=y
+
+# ============== netfilter / nftables (firewalld, Tailscale, WireGuard) =====
+CONFIG_NF_CONNTRACK=m
+CONFIG_NF_NAT=m
+CONFIG_NETFILTER_XTABLES=m
+CONFIG_NF_TABLES=m                       # already in the board config
+CONFIG_NF_TABLES_INET=y
+CONFIG_NFT_CT=m
+CONFIG_NFT_NAT=m
+CONFIG_NFT_MASQ=m
+CONFIG_NFT_REDIR=m
+CONFIG_NFT_REJECT=m
+CONFIG_NFT_REJECT_INET=m
+CONFIG_NFT_COMPAT=m
+CONFIG_NFT_LIMIT=m
+CONFIG_NFT_LOG=m
+CONFIG_NETFILTER_XT_TARGET_MASQUERADE=m
+CONFIG_NETFILTER_XT_MATCH_COMMENT=m
+CONFIG_NETFILTER_XT_MATCH_MARK=m
+CONFIG_IP_ADVANCED_ROUTER=y
+CONFIG_IP_MULTIPLE_TABLES=y
+CONFIG_WIREGUARD=m                       # already in the board config
